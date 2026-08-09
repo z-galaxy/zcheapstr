@@ -1,12 +1,12 @@
 [package]
-name = "zstr"
+name = "zcheapstr"
 version = "0.1.0"
 authors = ["Zeeshan Ali Khan <zeeshanak@gnome.org>"]
 edition = "2024"
 rust-version = "1.87"
 
 description = "An immutable, cheaply cloneable string type with borrowed, static and shared variants"
-repository = "https://github.com/z-galaxy/zstr/"
+repository = "https://github.com/z-galaxy/zcheapstr/"
 keywords = ["string", "cow", "zero-copy", "str", "borrowed"]
 license = "MIT"
 categories = ["data-structures", "memory-management", "text-processing"]

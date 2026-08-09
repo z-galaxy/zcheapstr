@@ -6,4 +6,4 @@
 #![doc(test(attr(warn(unused), deny(warnings))))]
 
 mod str;
-pub use crate::str::Str;
+pub use crate::str::CheapStr;

@@ -14,8 +14,8 @@ use std::{
 ///
 /// * is specialized for strings.
 /// * treats `&'static str` as a separate type. This allows you to avoid allocations and copying
-///   when turning an `Str` instance created from a `&'static str` into an owned version in generic
-///   code that doesn't/can't assume the inner lifetime of the source `Str` instance.
+///   when turning a `CheapStr` instance created from a `&'static str` into an owned version in
+///   generic code that doesn't/can't assume the inner lifetime of the source `CheapStr` instance.
 /// * stores owned strings in an [`Arc`], so `Clone` never copies or allocates: it either copies a
 ///   reference or increments a reference count.
 /// * is immutable. Consequently, unlike [`Cow`], it is *not* a copy-on-write type: there is no way
@@ -27,7 +27,7 @@ use std::{
 /// [`String`]: https://doc.rust-lang.org/std/string/struct.String.html
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Str<'a>(#[cfg_attr(feature = "serde", serde(borrow))] Inner<'a>);
+pub struct CheapStr<'a>(#[cfg_attr(feature = "serde", serde(borrow))] Inner<'a>);
 
 #[derive(Eq, Clone)]
 enum Inner<'a> {
@@ -94,18 +94,18 @@ impl<'de: 'a, 'a> Deserialize<'de> for Inner<'a> {
     }
 }
 
-impl Str<'_> {
+impl CheapStr<'_> {
     /// An owned string without allocations
     pub const fn from_static(s: &'static str) -> Self {
-        Str(Inner::Static(s))
+        CheapStr(Inner::Static(s))
     }
 
     /// This is faster than `Clone::clone` when `self` contains owned data.
-    pub fn as_ref(&self) -> Str<'_> {
+    pub fn as_ref(&self) -> CheapStr<'_> {
         match &self.0 {
-            Inner::Static(s) => Str(Inner::Static(s)),
-            Inner::Borrowed(s) => Str(Inner::Borrowed(s)),
-            Inner::Owned(s) => Str(Inner::Borrowed(s)),
+            Inner::Static(s) => CheapStr(Inner::Static(s)),
+            Inner::Borrowed(s) => CheapStr(Inner::Borrowed(s)),
+            Inner::Owned(s) => CheapStr(Inner::Borrowed(s)),
         }
     }
 
@@ -115,45 +115,45 @@ impl Str<'_> {
     }
 
     /// Creates an owned clone of `self`.
-    pub fn to_owned(&self) -> Str<'static> {
+    pub fn to_owned(&self) -> CheapStr<'static> {
         self.clone().into_owned()
     }
 
     /// Creates an owned clone of `self`.
-    pub fn into_owned(self) -> Str<'static> {
+    pub fn into_owned(self) -> CheapStr<'static> {
         match self.0 {
-            Inner::Static(s) => Str(Inner::Static(s)),
-            Inner::Borrowed(s) => Str(Inner::Owned(s.to_owned().into())),
-            Inner::Owned(s) => Str(Inner::Owned(s)),
+            Inner::Static(s) => CheapStr(Inner::Static(s)),
+            Inner::Borrowed(s) => CheapStr(Inner::Owned(s.to_owned().into())),
+            Inner::Owned(s) => CheapStr(Inner::Owned(s)),
         }
     }
 }
 
-impl<'a> From<&'a str> for Str<'a> {
+impl<'a> From<&'a str> for CheapStr<'a> {
     fn from(value: &'a str) -> Self {
         Self(Inner::Borrowed(value))
     }
 }
 
-impl<'a> From<&'a String> for Str<'a> {
+impl<'a> From<&'a String> for CheapStr<'a> {
     fn from(value: &'a String) -> Self {
         Self(Inner::Borrowed(value))
     }
 }
 
-impl From<String> for Str<'_> {
+impl From<String> for CheapStr<'_> {
     fn from(value: String) -> Self {
         Self(Inner::Owned(value.into()))
     }
 }
 
-impl From<Arc<str>> for Str<'_> {
+impl From<Arc<str>> for CheapStr<'_> {
     fn from(value: Arc<str>) -> Self {
         Self(Inner::Owned(value))
     }
 }
 
-impl<'a> From<Cow<'a, str>> for Str<'a> {
+impl<'a> From<Cow<'a, str>> for CheapStr<'a> {
     fn from(value: Cow<'a, str>) -> Self {
         match value {
             Cow::Owned(value) => value.into(),
@@ -162,8 +162,8 @@ impl<'a> From<Cow<'a, str>> for Str<'a> {
     }
 }
 
-impl<'a> From<Str<'a>> for String {
-    fn from(value: Str<'a>) -> String {
+impl<'a> From<CheapStr<'a>> for String {
+    fn from(value: CheapStr<'a>) -> String {
         match value.0 {
             Inner::Static(s) => s.into(),
             Inner::Borrowed(s) => s.into(),
@@ -172,13 +172,13 @@ impl<'a> From<Str<'a>> for String {
     }
 }
 
-impl<'a> From<&'a Str<'_>> for &'a str {
-    fn from(value: &'a Str<'_>) -> &'a str {
+impl<'a> From<&'a CheapStr<'_>> for &'a str {
+    fn from(value: &'a CheapStr<'_>) -> &'a str {
         value.as_str()
     }
 }
 
-impl std::ops::Deref for Str<'_> {
+impl std::ops::Deref for CheapStr<'_> {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -186,25 +186,25 @@ impl std::ops::Deref for Str<'_> {
     }
 }
 
-impl PartialEq<str> for Str<'_> {
+impl PartialEq<str> for CheapStr<'_> {
     fn eq(&self, other: &str) -> bool {
         self.as_str() == other
     }
 }
 
-impl PartialEq<&str> for Str<'_> {
+impl PartialEq<&str> for CheapStr<'_> {
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == *other
     }
 }
 
-impl std::fmt::Debug for Str<'_> {
+impl std::fmt::Debug for CheapStr<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(self.as_str(), f)
     }
 }
 
-impl std::fmt::Display for Str<'_> {
+impl std::fmt::Display for CheapStr<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self.as_str(), f)
     }
@@ -212,53 +212,53 @@ impl std::fmt::Display for Str<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::Str;
+    use super::CheapStr;
 
     #[test]
     fn from_string() {
         let string = String::from("value");
-        let v = Str::from(&string);
+        let v = CheapStr::from(&string);
         assert_eq!(v.as_str(), "value");
     }
 
     #[test]
     fn test_ordering() {
-        let first = Str::from("a".to_string());
-        let second = Str::from_static("b");
+        let first = CheapStr::from("a".to_string());
+        let second = CheapStr::from_static("b");
         assert!(first < second);
     }
 }
 
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
-    use super::Str;
+    use super::CheapStr;
 
     #[test]
     fn serde_round_trip() {
-        let s = Str::from("hello");
+        let s = CheapStr::from("hello");
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(json, "\"hello\"");
-        let deserialized: Str<'_> = serde_json::from_str(&json).unwrap();
+        let deserialized: CheapStr<'_> = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, s);
 
         // Owned data serializes the same way.
-        let owned = Str::from(String::from("hello"));
+        let owned = CheapStr::from(String::from("hello"));
         assert_eq!(serde_json::to_string(&owned).unwrap(), json);
     }
 
     #[test]
     fn serde_non_borrowable_input_errors() {
-        // `Str` only supports borrowed deserialization: input that cannot be handed out as a
+        // `CheapStr` only supports borrowed deserialization: input that cannot be handed out as a
         // borrowed `&str` (here because of the escape sequence) is an error, not an allocation.
-        serde_json::from_str::<Str<'_>>("\"a\\nb\"").unwrap_err();
+        serde_json::from_str::<CheapStr<'_>>("\"a\\nb\"").unwrap_err();
     }
 
     #[test]
     fn serde_borrowed_deserialization() {
         let json = String::from("\"borrowed\"");
-        let s: Str<'_> = serde_json::from_str(&json).unwrap();
+        let s: CheapStr<'_> = serde_json::from_str(&json).unwrap();
         assert_eq!(s.as_str(), "borrowed");
-        // The deserialized `Str` borrows from the JSON input instead of allocating.
+        // The deserialized `CheapStr` borrows from the JSON input instead of allocating.
         assert!(std::ptr::eq(s.as_str().as_ptr(), json[1..].as_ptr()));
     }
 }
