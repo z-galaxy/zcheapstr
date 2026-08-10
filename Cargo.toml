@@ -9,7 +9,7 @@ description = "An immutable, cheaply cloneable string type with borrowed, static
 repository = "https://github.com/z-galaxy/zcheapstr/"
 keywords = ["string", "cow", "zero-copy", "str", "borrowed"]
 license = "MIT"
-categories = ["data-structures", "memory-management", "text-processing"]
+categories = ["data-structures", "memory-management", "no-std", "text-processing"]
 readme = "README.md"
 
 [features]
@@ -17,7 +17,7 @@ default = []
 serde = ["dep:serde"]
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
 serde_json = "1.0"

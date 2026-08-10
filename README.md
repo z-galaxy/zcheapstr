@@ -16,6 +16,9 @@ This crate provides a single type, `CheapStr`: a string wrapper that is similar 
 
 API is provided to convert from, and to a [`&str`] and [`String`].
 
+The crate is `no_std`: it only requires [`alloc`], not `std` (this includes the `serde`
+feature).
+
 **Status:** Stable. This code was extracted from (and is battle-tested in) the [zvariant] crate,
 where the type was originally named `Str`.
 
@@ -62,6 +65,7 @@ borrows from the input data: `CheapStr<'de>` implements `Deserialize<'de>` but *
 If you need owned deserialization, deserialize into a `String` (or `Cow<'_, str>`) and convert it
 via `CheapStr::from`.
 
+[`alloc`]: https://doc.rust-lang.org/alloc/
 [`Cow`]: https://doc.rust-lang.org/std/borrow/enum.Cow.html
 [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 [`&str`]: https://doc.rust-lang.org/std/str/index.html
