@@ -1,16 +1,20 @@
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::{
-    borrow::Cow,
+
+use alloc::{
+    borrow::{Cow, ToOwned},
+    string::{String, ToString},
+    sync::Arc,
+};
+use core::{
     cmp::Ordering,
     hash::{Hash, Hasher},
-    sync::Arc,
 };
 
 /// A string wrapper.
 ///
 ///
-/// This is similar to the [`std::borrow::Cow`] type, but it:
+/// This is similar to the [`Cow`] type, but it:
 ///
 /// * is specialized for strings.
 /// * treats `&'static str` as a separate type. This allows you to avoid allocations and copying
@@ -178,7 +182,7 @@ impl<'a> From<&'a CheapStr<'_>> for &'a str {
     }
 }
 
-impl std::ops::Deref for CheapStr<'_> {
+impl core::ops::Deref for CheapStr<'_> {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -198,21 +202,22 @@ impl PartialEq<&str> for CheapStr<'_> {
     }
 }
 
-impl std::fmt::Debug for CheapStr<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self.as_str(), f)
+impl core::fmt::Debug for CheapStr<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(self.as_str(), f)
     }
 }
 
-impl std::fmt::Display for CheapStr<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self.as_str(), f)
+impl core::fmt::Display for CheapStr<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self.as_str(), f)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::CheapStr;
+    use alloc::string::{String, ToString};
 
     #[test]
     fn from_string() {
@@ -232,6 +237,7 @@ mod tests {
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     use super::CheapStr;
+    use alloc::string::String;
 
     #[test]
     fn serde_round_trip() {
@@ -259,6 +265,6 @@ mod serde_tests {
         let s: CheapStr<'_> = serde_json::from_str(&json).unwrap();
         assert_eq!(s.as_str(), "borrowed");
         // The deserialized `CheapStr` borrows from the JSON input instead of allocating.
-        assert!(std::ptr::eq(s.as_str().as_ptr(), json[1..].as_ptr()));
+        assert!(core::ptr::eq(s.as_str().as_ptr(), json[1..].as_ptr()));
     }
 }
