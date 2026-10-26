@@ -1,14 +1,11 @@
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use alloc::{
-    borrow::Cow,
-    string::{String, ToString},
-    sync::Arc,
-};
+use alloc::{borrow::Cow, string::String, sync::Arc};
 use core::{
     cmp::Ordering,
     hash::{Hash, Hasher},
+    ptr::NonNull,
 };
 
 /// A string wrapper.
@@ -33,11 +30,11 @@ use core::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CheapStr<'a>(#[cfg_attr(feature = "serde", serde(borrow))] Inner<'a>);
 
-#[derive(Eq, Clone)]
+#[derive(Clone)]
 enum Inner<'a> {
     Static(&'static str),
     Borrowed(&'a str),
-    Owned(Arc<str>),
+    Owned(ArcStr),
 }
 
 impl Default for Inner<'_> {
@@ -51,6 +48,8 @@ impl<'a> PartialEq for Inner<'a> {
         self.as_str() == other.as_str()
     }
 }
+
+impl Eq for Inner<'_> {}
 
 impl<'a> Ord for Inner<'a> {
     fn cmp(&self, other: &Inner<'a>) -> Ordering {
@@ -72,11 +71,11 @@ impl Hash for Inner<'_> {
 
 impl Inner<'_> {
     /// The underlying string.
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Inner::Static(s) => s,
             Inner::Borrowed(s) => s,
-            Inner::Owned(s) => s,
+            Inner::Owned(s) => s.as_str(),
         }
     }
 }
@@ -109,12 +108,24 @@ impl CheapStr<'_> {
         match &self.0 {
             Inner::Static(s) => CheapStr(Inner::Static(s)),
             Inner::Borrowed(s) => CheapStr(Inner::Borrowed(s)),
-            Inner::Owned(s) => CheapStr(Inner::Borrowed(s)),
+            Inner::Owned(s) => CheapStr(Inner::Borrowed(s.as_str())),
         }
     }
 
     /// The underlying string.
-    pub fn as_str(&self) -> &str {
+    ///
+    /// This is a `const fn`. As `CheapStr` has a destructor, which can't run in `const` context,
+    /// `const` code can only call it on an instance that is never dropped, such as one behind a
+    /// `const` reference or in a `static`:
+    ///
+    /// ```
+    /// use zcheapstr::CheapStr;
+    ///
+    /// const NAME: &CheapStr<'static> = &CheapStr::from_static("zcheapstr");
+    /// const NAME_STR: &str = NAME.as_str();
+    /// assert_eq!(NAME_STR, "zcheapstr");
+    /// ```
+    pub const fn as_str(&self) -> &str {
         self.0.as_str()
     }
 
@@ -127,7 +138,7 @@ impl CheapStr<'_> {
     pub fn into_owned(self) -> CheapStr<'static> {
         match self.0 {
             Inner::Static(s) => CheapStr(Inner::Static(s)),
-            Inner::Borrowed(s) => CheapStr(Inner::Owned(Arc::from(s))),
+            Inner::Borrowed(s) => CheapStr::from(Arc::<str>::from(s)),
             Inner::Owned(s) => CheapStr(Inner::Owned(s)),
         }
     }
@@ -147,13 +158,13 @@ impl<'a> From<&'a String> for CheapStr<'a> {
 
 impl From<String> for CheapStr<'_> {
     fn from(value: String) -> Self {
-        Self(Inner::Owned(value.into()))
+        Self::from(Arc::<str>::from(value))
     }
 }
 
 impl From<Arc<str>> for CheapStr<'_> {
     fn from(value: Arc<str>) -> Self {
-        Self(Inner::Owned(value))
+        Self(Inner::Owned(ArcStr::from(value)))
     }
 }
 
@@ -171,7 +182,7 @@ impl<'a> From<CheapStr<'a>> for String {
         match value.0 {
             Inner::Static(s) => s.into(),
             Inner::Borrowed(s) => s.into(),
-            Inner::Owned(s) => s.to_string(),
+            Inner::Owned(s) => s.as_str().into(),
         }
     }
 }
@@ -214,10 +225,83 @@ impl core::fmt::Display for CheapStr<'_> {
     }
 }
 
+/// An `Arc<str>`, held as the pointer to its string.
+///
+/// `Arc` offers no way to reach its data in `const` context, while a pointer can be dereferenced
+/// there. Holding the pointer that `Arc::into_raw` returns, instead of the `Arc` itself, is what
+/// allows [`CheapStr::as_str`] to be a `const fn`.
+///
+/// The unsafe code below relies on this invariant: the pointer is one that `Arc::<str>::into_raw`
+/// returned, and the `ArcStr` owns one strong reference to that `Arc`. `From` sets it up, taking
+/// over the reference of the `Arc` it is given, `Clone` adds a reference for the clone to own and
+/// `Drop` gives the reference back. Nothing else creates an `ArcStr`, changes its pointer or
+/// touches the reference counts, and as neither the type nor its field is visible outside of this
+/// file, no other code can.
+struct ArcStr(NonNull<str>);
+
+impl ArcStr {
+    const fn as_str(&self) -> &str {
+        // SAFETY: By the invariant, the pointer points to the string of an `Arc` that `self` owns
+        // a strong reference to. The returned reference borrows `self`, so `self` and its strong
+        // reference outlive it, which keeps the string allocated. Nothing can change the string
+        // meanwhile either: `str` has no interior mutability, and `Arc` only grants mutable access
+        // to its data when no other `Arc` or `Weak` points to the same allocation, which the strong
+        // reference of `self` rules out.
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl From<Arc<str>> for ArcStr {
+    fn from(value: Arc<str>) -> Self {
+        // `into_raw` doesn't give back the strong reference of `value`: the `ArcStr` takes it over.
+        let ptr = Arc::into_raw(value).cast_mut();
+        // SAFETY: `Arc::into_raw` never returns a null pointer, as it points to the data inside the
+        // allocation of the `Arc`.
+        Self(unsafe { NonNull::new_unchecked(ptr) })
+    }
+}
+
+impl Clone for ArcStr {
+    fn clone(&self) -> Self {
+        // SAFETY: By the invariant, the pointer is one that `Arc::<str>::into_raw` returned, so it
+        // has the layout that `Arc<str>` requires and points into memory of the global allocator,
+        // which `Arc<str>` uses. The strong reference of `self` keeps that `Arc` alive throughout.
+        // The clone owns the reference that this adds, which upholds the invariant for it.
+        unsafe { Arc::increment_strong_count(self.0.as_ptr()) };
+
+        Self(self.0)
+    }
+}
+
+impl Drop for ArcStr {
+    fn drop(&mut self) {
+        // SAFETY: By the invariant, the pointer is one that `Arc::<str>::into_raw` returned, and
+        // `self` owns a strong reference to that `Arc`. The rebuilt `Arc` takes that reference over
+        // and gives it back as it is dropped here. As `self` is never used again, and every
+        // `ArcStr` owns a reference of its own, each reference is given back exactly once.
+        drop(unsafe { Arc::from_raw(self.0.as_ptr()) });
+    }
+}
+
+// SAFETY: An `ArcStr` uses its pointer only to read the string, which can't change (see
+// `ArcStr::as_str`), and to change the reference counts of the `Arc`, which `Arc` does atomically.
+// So it can be sent to, and dropped on, another thread like the `Arc<str>` it stands for, which is
+// `Send` as `str` is `Send` and `Sync`.
+unsafe impl Send for ArcStr {}
+
+// SAFETY: A shared `ArcStr` can only be read, or cloned, which adds a strong reference atomically.
+// So it can be shared between threads like the `Arc<str>` it stands for, which is `Sync` as `str`
+// is `Send` and `Sync`.
+unsafe impl Sync for ArcStr {}
+
 #[cfg(test)]
 mod tests {
     use super::CheapStr;
-    use alloc::string::{String, ToString};
+    use alloc::{
+        string::{String, ToString},
+        sync::Arc,
+    };
+    use core::panic::{RefUnwindSafe, UnwindSafe};
 
     #[test]
     fn from_string() {
@@ -231,6 +315,44 @@ mod tests {
         let first = CheapStr::from("a".to_string());
         let second = CheapStr::from_static("b");
         assert!(first < second);
+    }
+
+    #[test]
+    fn as_str_in_const() {
+        const STATIC: &CheapStr<'static> = &CheapStr::from_static("static");
+        const STATIC_STR: &str = STATIC.as_str();
+        assert_eq!(STATIC_STR, "static");
+    }
+
+    #[test]
+    fn shared_data() {
+        let arc = Arc::<str>::from("shared");
+        let s = CheapStr::from(arc.clone());
+        assert_eq!(s.as_str(), "shared");
+        assert_eq!(Arc::strong_count(&arc), 2);
+
+        // Neither cloning nor turning into an owned instance copies the string.
+        let clone = s.clone();
+        assert_eq!(Arc::strong_count(&arc), 3);
+        assert!(core::ptr::eq(clone.as_str(), &*arc));
+        let owned = s.into_owned();
+        assert_eq!(Arc::strong_count(&arc), 3);
+        assert!(core::ptr::eq(owned.as_str(), &*arc));
+
+        drop(clone);
+        assert_eq!(String::from(owned), "shared");
+        assert_eq!(Arc::strong_count(&arc), 1);
+    }
+
+    #[test]
+    fn auto_traits() {
+        fn assert_auto_traits<T>()
+        where
+            T: Send + Sync + Unpin + UnwindSafe + RefUnwindSafe,
+        {
+        }
+
+        assert_auto_traits::<CheapStr<'_>>();
     }
 }
 
