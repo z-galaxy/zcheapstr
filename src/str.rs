@@ -2,7 +2,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use alloc::{
-    borrow::{Cow, ToOwned},
+    borrow::Cow,
     string::{String, ToString},
     sync::Arc,
 };
@@ -127,7 +127,7 @@ impl CheapStr<'_> {
     pub fn into_owned(self) -> CheapStr<'static> {
         match self.0 {
             Inner::Static(s) => CheapStr(Inner::Static(s)),
-            Inner::Borrowed(s) => CheapStr(Inner::Owned(s.to_owned().into())),
+            Inner::Borrowed(s) => CheapStr(Inner::Owned(Arc::from(s))),
             Inner::Owned(s) => CheapStr(Inner::Owned(s)),
         }
     }
