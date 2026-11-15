@@ -105,3 +105,11 @@ jobs:
         run: |
           cargo --locked check --target x86_64-unknown-none --no-default-features
           cargo --locked check --target x86_64-unknown-none --all-features
+
+  semver-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Check semver
+        uses: obi1kenobi/cargo-semver-checks-action@v2
