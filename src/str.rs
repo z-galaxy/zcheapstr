@@ -1,7 +1,7 @@
 #[cfg(feature = "serde")]
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
-    de::{self, SeqAccess, Unexpected, Visitor},
+    de::{self, Unexpected, Visitor},
 };
 
 use alloc::{borrow::Cow, string::String, sync::Arc};
@@ -30,7 +30,6 @@ use core::{
 /// [`&str`]: https://doc.rust-lang.org/std/str/index.html
 /// [`String`]: https://doc.rust-lang.org/std/string/struct.String.html
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct CheapStr<'a>(Inner<'a>);
 
 #[derive(Clone)]
@@ -84,7 +83,7 @@ impl Inner<'_> {
 }
 
 #[cfg(feature = "serde")]
-impl Serialize for Inner<'_> {
+impl Serialize for CheapStr<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(self.as_str())
     }
@@ -96,9 +95,7 @@ impl<'de: 'a, 'a> Deserialize<'de> for CheapStr<'a> {
     where
         D: Deserializer<'de>,
     {
-        // `CheapStr` serializes as a newtype struct, which most formats write as the bare string,
-        // but some mark as a newtype struct or write as a sequence of one.
-        deserializer.deserialize_newtype_struct("CheapStr", CheapStrVisitor)
+        deserializer.deserialize_str(CheapStrVisitor)
     }
 }
 
@@ -113,21 +110,6 @@ impl<'de> Visitor<'de> for CheapStrVisitor {
 
     fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("a string")
-    }
-
-    fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_str(self)
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        seq.next_element()?
-            .ok_or_else(|| de::Error::invalid_length(0, &self))
     }
 
     fn visit_borrowed_str<E>(self, s: &'de str) -> Result<Self::Value, E>
@@ -473,7 +455,7 @@ mod serde_tests {
         Deserialize,
         de::{
             IntoDeserializer,
-            value::{BorrowedBytesDeserializer, BorrowedStrDeserializer, Error, SeqDeserializer},
+            value::{BorrowedBytesDeserializer, BorrowedStrDeserializer, Error},
         },
     };
 
@@ -510,8 +492,6 @@ mod serde_tests {
 
     #[test]
     fn serde_value_deserializers() {
-        // serde's own deserializers hand the visitor of a newtype struct the bare string, or a
-        // sequence.
         let lent = "lent";
         let s = CheapStr::deserialize(BorrowedStrDeserializer::<Error>::new(lent)).unwrap();
         assert!(core::ptr::eq(s.as_str(), lent));
@@ -519,14 +499,23 @@ mod serde_tests {
         let s = CheapStr::deserialize(IntoDeserializer::<Error>::into_deserializer(shown)).unwrap();
         assert_eq!(s.as_str(), shown);
         assert!(!core::ptr::eq(s.as_str(), shown));
-        let seq = SeqDeserializer::<_, Error>::new(["one"].into_iter());
-        assert_eq!(CheapStr::deserialize(seq).unwrap().as_str(), "one");
 
-        let seq = SeqDeserializer::<_, Error>::new(core::iter::empty::<&str>());
-        CheapStr::deserialize(seq).unwrap_err();
         CheapStr::deserialize(IntoDeserializer::<Error>::into_deserializer(42_i32)).unwrap_err();
         let invalid = BorrowedBytesDeserializer::<Error>::new(&[0xff, 0xfe]);
         CheapStr::deserialize(invalid).unwrap_err();
+    }
+
+    #[test]
+    fn serde_plain_string_in_ron() {
+        // RON tells a plain string from a newtype struct, which `CheapStr` used to serialize as.
+        let s = CheapStr::from("x");
+        let ron = ron::to_string(&s).unwrap();
+        assert_eq!(ron, r#""x""#);
+        assert_eq!(ron::from_str::<CheapStr<'_>>(&ron).unwrap(), s);
+
+        let lent = String::from(r#""lent""#);
+        let s: CheapStr<'_> = ron::from_str(&lent).unwrap();
+        assert!(core::ptr::eq(s.as_str().as_ptr(), lent[1..].as_ptr()));
     }
 
     #[test]
