@@ -169,7 +169,7 @@ impl<'de> Visitor<'de> for CheapStrVisitor {
     }
 }
 
-impl CheapStr<'_> {
+impl<'a> CheapStr<'a> {
     /// An owned string without allocations
     pub const fn from_static(s: &'static str) -> Self {
         CheapStr(Inner::Static(s))
@@ -199,6 +199,30 @@ impl CheapStr<'_> {
     /// ```
     pub const fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+
+    /// The string, for as long as `'a`, where `self` holds a borrowed or a `'static` one, and
+    /// `None` where it holds an owned one.
+    ///
+    /// Unlike the string that [`CheapStr::as_str`] gives, which borrows `self`, this one outlives
+    /// `self`, so that code that parses the string in place can keep borrowing from where the
+    /// string came from:
+    ///
+    /// ```
+    /// use zcheapstr::CheapStr;
+    ///
+    /// let text = String::from("borrowed");
+    /// let borrowed: &str = CheapStr::from(text.as_str()).as_borrowed().unwrap();
+    /// assert_eq!(borrowed, "borrowed");
+    ///
+    /// assert_eq!(CheapStr::from(String::from("owned")).as_borrowed(), None);
+    /// ```
+    pub const fn as_borrowed(&self) -> Option<&'a str> {
+        match self.0 {
+            Inner::Static(s) => Some(s),
+            Inner::Borrowed(s) => Some(s),
+            Inner::Owned(_) => None,
+        }
     }
 
     /// Creates an owned clone of `self`.
@@ -417,6 +441,19 @@ mod tests {
     }
 
     #[test]
+    fn as_borrowed() {
+        let text = String::from("borrowed");
+        let borrowed = CheapStr::from(text.as_str()).as_borrowed().unwrap();
+        assert!(core::ptr::eq(borrowed, text.as_str()));
+
+        assert_eq!(
+            CheapStr::from_static("static").as_borrowed(),
+            Some("static")
+        );
+        assert_eq!(CheapStr::from(String::from("owned")).as_borrowed(), None);
+    }
+
+    #[test]
     fn auto_traits() {
         fn assert_auto_traits<T>()
         where
@@ -459,6 +496,7 @@ mod serde_tests {
         let json = "\"a\\nb\"";
         let s: CheapStr<'_> = serde_json::from_str(json).unwrap();
         assert_eq!(s.as_str(), "a\nb");
+        assert_eq!(s.as_borrowed(), None);
     }
 
     #[test]
@@ -498,5 +536,6 @@ mod serde_tests {
         assert_eq!(s.as_str(), "borrowed");
         // The deserialized `CheapStr` borrows from the JSON input instead of allocating.
         assert!(core::ptr::eq(s.as_str().as_ptr(), json[1..].as_ptr()));
+        assert_eq!(s.as_borrowed(), Some("borrowed"));
     }
 }
