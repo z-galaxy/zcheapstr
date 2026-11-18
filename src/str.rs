@@ -1,5 +1,8 @@
 #[cfg(feature = "serde")]
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, SeqAccess, Unexpected, Visitor},
+};
 
 use alloc::{borrow::Cow, string::String, sync::Arc};
 use core::{
@@ -27,8 +30,8 @@ use core::{
 /// [`&str`]: https://doc.rust-lang.org/std/str/index.html
 /// [`String`]: https://doc.rust-lang.org/std/string/struct.String.html
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CheapStr<'a>(#[cfg_attr(feature = "serde", serde(borrow))] Inner<'a>);
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct CheapStr<'a>(Inner<'a>);
 
 #[derive(Clone)]
 enum Inner<'a> {
@@ -88,12 +91,81 @@ impl Serialize for Inner<'_> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de: 'a, 'a> Deserialize<'de> for Inner<'a> {
+impl<'de: 'a, 'a> Deserialize<'de> for CheapStr<'a> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        <&'a str>::deserialize(deserializer).map(Inner::Borrowed)
+        // `CheapStr` serializes as a newtype struct, which most formats write as the bare string,
+        // but some mark as a newtype struct or write as a sequence of one.
+        deserializer.deserialize_newtype_struct("CheapStr", CheapStrVisitor)
+    }
+}
+
+/// Decodes a [`CheapStr`] that borrows the string where the deserializer lends it, and that holds
+/// a copy in an [`Arc`] otherwise.
+#[cfg(feature = "serde")]
+struct CheapStrVisitor;
+
+#[cfg(feature = "serde")]
+impl<'de> Visitor<'de> for CheapStrVisitor {
+    type Value = CheapStr<'de>;
+
+    fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("a string")
+    }
+
+    fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(self)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        seq.next_element()?
+            .ok_or_else(|| de::Error::invalid_length(0, &self))
+    }
+
+    fn visit_borrowed_str<E>(self, s: &'de str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(CheapStr(Inner::Borrowed(s)))
+    }
+
+    // A `String` that the deserializer hands over comes here too, through the default
+    // `visit_string`: making an `Arc<str>` of it copies the string either way.
+    fn visit_str<E>(self, s: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(CheapStr::from(Arc::<str>::from(s)))
+    }
+
+    fn visit_borrowed_bytes<E>(self, bytes: &'de [u8]) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let Ok(s) = core::str::from_utf8(bytes) else {
+            return Err(E::invalid_value(Unexpected::Bytes(bytes), &self));
+        };
+
+        self.visit_borrowed_str(s)
+    }
+
+    fn visit_bytes<E>(self, bytes: &[u8]) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let Ok(s) = core::str::from_utf8(bytes) else {
+            return Err(E::invalid_value(Unexpected::Bytes(bytes), &self));
+        };
+
+        self.visit_str(s)
     }
 }
 
@@ -360,6 +432,13 @@ mod tests {
 mod serde_tests {
     use super::CheapStr;
     use alloc::string::String;
+    use serde::{
+        Deserialize,
+        de::{
+            IntoDeserializer,
+            value::{BorrowedBytesDeserializer, BorrowedStrDeserializer, Error, SeqDeserializer},
+        },
+    };
 
     #[test]
     fn serde_round_trip() {
@@ -375,10 +454,41 @@ mod serde_tests {
     }
 
     #[test]
-    fn serde_non_borrowable_input_errors() {
-        // `CheapStr` only supports borrowed deserialization: input that cannot be handed out as a
-        // borrowed `&str` (here because of the escape sequence) is an error, not an allocation.
-        serde_json::from_str::<CheapStr<'_>>("\"a\\nb\"").unwrap_err();
+    fn serde_non_borrowable_input_is_copied() {
+        // The escape sequence keeps serde_json from lending the string, so it's copied.
+        let json = "\"a\\nb\"";
+        let s: CheapStr<'_> = serde_json::from_str(json).unwrap();
+        assert_eq!(s.as_str(), "a\nb");
+    }
+
+    #[test]
+    fn serde_owned_deserialization() {
+        // Neither a reader nor a `Value` has input to lend the string from.
+        let mut de = serde_json::Deserializer::from_reader(&b"\"read\""[..]);
+        assert_eq!(CheapStr::deserialize(&mut de).unwrap().as_str(), "read");
+        let value = serde_json::Value::from("value");
+        assert_eq!(CheapStr::deserialize(value).unwrap().as_str(), "value");
+    }
+
+    #[test]
+    fn serde_value_deserializers() {
+        // serde's own deserializers hand the visitor of a newtype struct the bare string, or a
+        // sequence.
+        let lent = "lent";
+        let s = CheapStr::deserialize(BorrowedStrDeserializer::<Error>::new(lent)).unwrap();
+        assert!(core::ptr::eq(s.as_str(), lent));
+        let shown = "shown";
+        let s = CheapStr::deserialize(IntoDeserializer::<Error>::into_deserializer(shown)).unwrap();
+        assert_eq!(s.as_str(), shown);
+        assert!(!core::ptr::eq(s.as_str(), shown));
+        let seq = SeqDeserializer::<_, Error>::new(["one"].into_iter());
+        assert_eq!(CheapStr::deserialize(seq).unwrap().as_str(), "one");
+
+        let seq = SeqDeserializer::<_, Error>::new(core::iter::empty::<&str>());
+        CheapStr::deserialize(seq).unwrap_err();
+        CheapStr::deserialize(IntoDeserializer::<Error>::into_deserializer(42_i32)).unwrap_err();
+        let invalid = BorrowedBytesDeserializer::<Error>::new(&[0xff, 0xfe]);
+        CheapStr::deserialize(invalid).unwrap_err();
     }
 
     #[test]
