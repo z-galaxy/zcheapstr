@@ -58,12 +58,13 @@ All features are disabled by default.
 | ---     | ----------- |
 | serde   | Implement [serde]'s `Serialize` and `Deserialize` for `CheapStr` |
 
-With the `serde` feature enabled, `CheapStr` is serialized as a plain string. Deserialization always
-borrows from the input data: `CheapStr<'de>` implements `Deserialize<'de>` but *not*
-`DeserializeOwned`, so deserialization fails when the deserializer cannot provide a borrowed
-`&str` (for example, JSON strings containing escape sequences, or reader-based deserialization).
-If you need owned deserialization, deserialize into a `String` (or `Cow<'_, str>`) and convert it
-via `CheapStr::from`.
+With the `serde` feature enabled, `CheapStr` is (de)serialized as a plain string, in every format.
+Deserialization borrows from the input data where the deserializer lends the string, and copies it
+into an [`Arc`] otherwise (for example, JSON strings containing escape sequences, or reader-based
+deserialization). `CheapStr<'de>` implements `Deserialize<'de>` but *not* `DeserializeOwned`, so
+where an API requires the latter, such as `serde_json::from_reader`, deserialize into a `String` and
+convert it via `CheapStr::from`, or call `into_owned` on a `CheapStr` deserialized through
+`Deserialize::deserialize`.
 
 [`alloc`]: https://doc.rust-lang.org/alloc/
 [`Cow`]: https://doc.rust-lang.org/std/borrow/enum.Cow.html
