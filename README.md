@@ -14,7 +14,8 @@ This crate provides a single type, `CheapStr`: a string wrapper that is similar 
 * is immutable. Consequently, unlike [`Cow`], it is *not* a copy-on-write type: there is no way to
   get a mutable reference to the underlying string.
 
-API is provided to convert from, and to a [`&str`] and [`String`].
+API is provided to convert from, and to a [`&str`] and [`String`]. A map or a set with `CheapStr`
+keys can be looked up by `&str`.
 
 The crate is `no_std`: it only requires [`alloc`], not `std` (this includes the `serde`
 feature).
