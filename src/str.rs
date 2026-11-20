@@ -6,6 +6,7 @@ use serde::{
 
 use alloc::{borrow::Cow, string::String, sync::Arc};
 use core::{
+    borrow::Borrow,
     cmp::Ordering,
     hash::{Hash, Hasher},
     ptr::NonNull,
@@ -25,7 +26,8 @@ use core::{
 /// * is immutable. Consequently, unlike [`Cow`], it is *not* a copy-on-write type: there is no way
 ///   to get a mutable reference to the underlying string.
 ///
-/// API is provided to convert from, and to a [`&str`] and [`String`].
+/// API is provided to convert from, and to a [`&str`] and [`String`]. A map or a set with
+/// `CheapStr` keys can be looked up by `&str`.
 ///
 /// [`&str`]: https://doc.rust-lang.org/std/str/index.html
 /// [`String`]: https://doc.rust-lang.org/std/string/struct.String.html
@@ -271,6 +273,14 @@ impl<'a> From<&'a CheapStr<'_>> for &'a str {
     }
 }
 
+// `Hash`, `Eq` and `Ord` all go through `as_str`, so they agree with those of `str`, as `Borrow`
+// requires of a type that keys maps and sets that are looked up by `&str`.
+impl Borrow<str> for CheapStr<'_> {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
 impl core::ops::Deref for CheapStr<'_> {
     type Target = str;
 
@@ -374,12 +384,16 @@ unsafe impl Sync for ArcStr {}
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::CheapStr;
     use alloc::{
+        collections::{BTreeMap, BTreeSet},
         string::{String, ToString},
         sync::Arc,
     };
     use core::panic::{RefUnwindSafe, UnwindSafe};
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn from_string() {
@@ -433,6 +447,18 @@ mod tests {
             Some("static")
         );
         assert_eq!(CheapStr::from(String::from("owned")).as_borrowed(), None);
+    }
+
+    #[test]
+    fn maps_and_sets_are_looked_up_by_str() {
+        let hashed = HashMap::from([(CheapStr::from(String::from("key")), 1)]);
+        assert_eq!(hashed.get("key"), Some(&1));
+        assert!(HashSet::from([CheapStr::from("key")]).contains("key"));
+
+        let ordered = BTreeMap::from([(CheapStr::from_static("b"), 2), (CheapStr::from("a"), 1)]);
+        assert_eq!(ordered.get("a"), Some(&1));
+        assert_eq!(ordered.get("b"), Some(&2));
+        assert!(BTreeSet::from([CheapStr::from("key")]).contains("key"));
     }
 
     #[test]
